@@ -1,0 +1,17 @@
+# 忽略目标文件夹，分别对应三个任务
+/task1/target/
+/task2/target/
+/task3/target/
+
+
+**/*.rs.bk
+
+# 忽略一些编辑器的配置文件
+.idea/
+*.iml
+
+.vscode/
+
+.DS_Store
+
+Thumbs.db
