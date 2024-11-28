@@ -1,10 +1,10 @@
-use eframe::{egui, App, CreationContext};
+use eframe::{egui, CreationContext};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use rfd;  // 导入 rfd
-use std::io;
+use regex::Regex;  // 引入正则表达式库
 
 #[derive(Serialize, Deserialize, Debug)]
 struct WordCount {
@@ -17,6 +17,15 @@ struct MyApp {
     output_file: Option<PathBuf>,
     word_counts: Vec<WordCount>,
     show_output: bool,
+    search_query: String,
+    settings: Settings,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Settings {
+    case_sensitive: bool,
+    remove_punctuation: bool,
+    remove_numbers: bool,
 }
 
 impl Default for MyApp {
@@ -26,6 +35,12 @@ impl Default for MyApp {
             output_file: None,
             word_counts: Vec::new(),
             show_output: false,
+            search_query: String::new(),
+            settings: Settings {
+                case_sensitive: false,
+                remove_punctuation: true,
+                remove_numbers: true,
+            },
         }
     }
 }
@@ -56,43 +71,77 @@ impl eframe::App for MyApp {
                 }
             }
 
-            if self.show_output {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for wc in &self.word_counts {
-                        ui.label(format!("{}: {}", wc.word, wc.count));
-                    }
-                });
-
-                if ui.button("保存输出到文件").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().set_directory(".").save_file() {
-                        self.output_file = Some(path);
-                        if let Some(output_path) = &self.output_file {
-                            match serde_json::to_string_pretty(&self.word_counts) {
-                                Ok(json_data) => {
-                                    if fs::write(output_path, json_data).is_ok() {
-                                        ui.label("输出已成功保存!");
-                                    } else {
-                                        ui.label("保存输出失败，请检查文件权限或磁盘空间。");
-                                    }
-                                },
-                                Err(e) => {
-                                    ui.label(format!("序列化数据失败: {}", e));
+            if self.show_output && ui.button("保存输出到文件").clicked() {
+                if let Some(path) = rfd::FileDialog::new().set_directory(".").save_file() {
+                    self.output_file = Some(path);
+                    if let Some(output_path) = &self.output_file {
+                        match serde_json::to_string_pretty(&self.word_counts) {
+                            Ok(json_data) => {
+                                if fs::write(output_path, json_data).is_ok() {
+                                    ui.label("输出已成功保存!");
+                                } else {
+                                    ui.label("保存输出失败，请检查文件权限或磁盘空间。");
                                 }
+                            },
+                            Err(e) => {
+                                ui.label(format!("序列化数据失败: {}", e));
                             }
                         }
                     }
                 }
             }
+
+            // 搜索框
+            ui.horizontal(|ui| {
+                ui.label("搜索:");
+                ui.text_edit_singleline(&mut self.search_query);
+            });
+
+            // 设置选项
+            ui.collapsing("设置", |ui| {
+                ui.checkbox(&mut self.settings.case_sensitive, "区分大小写");
+                ui.checkbox(&mut self.settings.remove_punctuation, "去除标点符号");
+                ui.checkbox(&mut self.settings.remove_numbers, "去除数字");
+            });
         });
+
+        if self.show_output {
+            egui::SidePanel::right("output_panel")
+                .resizable(true)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for wc in &self.word_counts {
+                            if self.search_query.is_empty() || wc.word.contains(&self.search_query) {
+                                ui.label(format!("{}: {}", wc.word, wc.count));
+                            }
+                        }
+                    });
+                });
+        }
     }
 }
 
 impl MyApp {
     fn count_words(&self, contents: &str) -> Vec<WordCount> {
         let mut counts: HashMap<String, u32> = HashMap::new();
-        for word in contents.split_whitespace() {
-            *counts.entry(word.to_lowercase()).or_insert(0) += 1;
+
+        let mut content = contents.to_string();
+        if self.settings.remove_punctuation {
+            content = Regex::new(r"[^\w\s]").unwrap().replace_all(&content, "").to_string();
         }
+        if self.settings.remove_numbers {
+            content = Regex::new(r"\d+").unwrap().replace_all(&content, "").to_string();
+        }
+
+        for word in content.split_whitespace() {
+            let word = if self.settings.case_sensitive {
+                word.to_string()
+            } else {
+                word.to_lowercase()
+            };
+            *counts.entry(word).or_insert(0) += 1;
+        }
+
         counts.into_iter()
             .map(|(word, count)| WordCount { word, count })
             .collect()
@@ -102,7 +151,6 @@ impl MyApp {
 fn main() {
     let app = MyApp::default();
     let options = eframe::NativeOptions::default();
-    // 注意这里移除了 .unwrap()
     eframe::run_native(
         "单词计数应用程序",
         options,
