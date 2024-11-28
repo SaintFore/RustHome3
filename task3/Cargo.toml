@@ -1,6 +1,13 @@
+# Cargo.toml
 [package]
 name = "task3"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+thiserror = "2.0.3"
+rayon = "1.5"
+prettytable = "0.10"
+egui = "0.29.1"
+eframe = "0.29.1"
+
