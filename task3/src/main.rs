@@ -4,6 +4,7 @@ use std::path::{Path};
 use thiserror::Error;
 use eframe::{self, egui::{self, Context, CentralPanel, ScrollArea}};
 use eframe::NativeOptions; // 确保导入 NativeOptions
+use std::str::FromStr;
 
 // 定义错误类型
 #[derive(Debug, Error)]
@@ -25,22 +26,27 @@ struct Record {
     name: String,
 }
 
-impl Record {
-    // 从字节数组中解析记录
-    fn from_bytes(bytes: &[u8]) -> Result<Self, MyError> {
-        if bytes.len() < 6 {
-            return Err(MyError::InvalidFormat); // 确保数据格式正确
+// 实现 FromStr trait，用于从字符串中解析 Record
+impl FromStr for Record {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // 去除两边的括号
+        let s = s.trim_matches(|c| c == '(' || c == ')');
+
+        // 分割字段
+        let parts: Vec<&str> = s.split(',').collect();
+
+        if parts.len() != 3 {
+            return Err("Invalid record format");
         }
 
-        let id = u32::from_le_bytes(bytes[1..5].try_into().unwrap()); // 接下来4个字节是 ID
-        let name_length = bytes[5] as usize; // 第6个字节是名字的长度
+        // 解析 record_type 和 id，返回错误时提示失败
+        let record_type = parts[0].trim().parse::<u32>().map_err(|_| "Invalid record type")?;
+        let id = parts[1].trim().parse::<u32>().map_err(|_| "Invalid ID")?;
 
-        if bytes.len() < 6 + name_length {
-            return Err(MyError::InvalidFormat); // 数据不足
-        }
-
-        // 解析名字字段
-        let name = String::from_utf8_lossy(&bytes[6..6 + name_length]).to_string();
+        // 解析 name，去掉引号
+        let name = parts[2].trim().trim_matches('"').to_string();
 
         Ok(Record {
             id,
@@ -49,43 +55,45 @@ impl Record {
     }
 }
 
-// 解析二进制文件
-fn parse_binary_file(file_path: &Path) -> io::Result<Vec<Record>> {
-    let mut file = File::open(file_path)?;
+// 解析二进制文件函数
+fn parse_binary_file(file_path: &Path) -> Result<Vec<Record>, MyError> {
+    let mut file = File::open(file_path).map_err(MyError::IoError)?; // 打开文件
     let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+    file.read_to_end(&mut buffer).map_err(MyError::IoError)?; // 读取文件内容到 buffer
 
     let mut records = Vec::new();
     let mut cursor = 0;
 
-
-
-
-
     while cursor < buffer.len() {
-        // 确保读取的记录长度合理
-        if cursor + 6 > buffer.len() {
-            break; // 至少要有6个字节（id 和 name_length）
+        // 跳过空格和其他非必要字符
+        if buffer[cursor] == b' ' || buffer[cursor] == b'\n' || buffer[cursor] == b'\r' {
+            cursor += 1;
+            continue;
         }
 
-        let id = u32::from_le_bytes(buffer[cursor + 1..cursor + 5].try_into().unwrap()); // 接下来4个字节是 ID
-        let name_length = buffer[cursor + 5] as usize; // 第6个字节是名字的长度
+        // 找到记录的开始位置
+        let record_start = cursor;
 
-        if cursor + 6 + name_length > buffer.len() {
-            break; // 防止越界，确保能读取整个名字
+        // 查找记录的结束位置（右括号）并提取记录
+        while cursor < buffer.len() && buffer[cursor] != b')' {
+            cursor += 1;
+        }
+        let record_end = cursor;
+
+        // 将字节数据转换为字符串
+        let record_str = String::from_utf8_lossy(&buffer[record_start..=record_end]);
+
+        // 使用 FromStr 解析 Record
+        match Record::from_str(&record_str) {
+            Ok(record) => records.push(record),
+            Err(_) => return Err(MyError::InvalidFormat), // 如果解析失败，返回格式错误
         }
 
-        // 解析名字字段
-        let name = String::from_utf8_lossy(&buffer[cursor + 6..cursor + 6 + name_length]).to_string();
+        // 移动 cursor，跳过右括号
+        cursor += 1;
 
-        // 将解析到的记录添加到记录列表中
-        records.push(Record {
-            id,
-            name,
-        });
-
-        // 更新游标位置，跳过当前记录
-        cursor += 6 + name_length; // 6个字节用于ID和名字长度，剩余是名字
+        // 跳过下一条数据的左括号
+        cursor += 1;
     }
 
     Ok(records)
