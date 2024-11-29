@@ -101,6 +101,9 @@ impl eframe::App for MyApp {
                 ui.text_edit_singleline(&mut self.search_query);
             });
 
+            // 对 word_counts 按照字典序排序
+            self.word_counts.sort_by(|a, b| a.word.cmp(&b.word));
+
             // 设置选项
             ui.collapsing("设置", |ui| {
                 ui.checkbox(&mut self.settings.case_sensitive, "区分大小写");
