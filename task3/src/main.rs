@@ -1,9 +1,10 @@
-use std::env;
 use std::fs::File;
 use std::io::{self, Read};
+use std::path::{Path};
 use thiserror::Error;
 use eframe::{self, egui::{self, Context, CentralPanel, ScrollArea}};
 use eframe::NativeOptions; // 确保导入 NativeOptions
+use std::str::FromStr;
 
 // 定义错误类型
 #[derive(Debug, Error)]
@@ -21,102 +22,105 @@ pub enum MyError {
 // 定义记录结构体
 #[derive(Debug)]
 struct Record {
-    record_type: i32,
-    id: i32,
+    id: u32,
     name: String,
 }
 
-impl Record {
-    fn from_bytes(bytes: &[u8]) -> Result<Self, MyError> {
-        if bytes.len() < 28 {
-            return Err(MyError::InvalidFormat);
+// 实现 FromStr trait，用于从字符串中解析 Record
+impl FromStr for Record {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // 去除两边的括号
+        let s = s.trim_matches(|c| c == '(' || c == ')');
+
+        // 分割字段
+        let parts: Vec<&str> = s.split(',').collect();
+
+        if parts.len() != 3 {
+            return Err("Invalid record format");
         }
 
-        let record_type = i32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        let id = i32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        let name = String::from_utf8_lossy(&bytes[8..28]).trim_end().to_string();
+        // 解析 record_type 和 id，返回错误时提示失败
+        let record_type = parts[0].trim().parse::<u32>().map_err(|_| "Invalid record type")?;
+        let id = parts[1].trim().parse::<u32>().map_err(|_| "Invalid ID")?;
 
-        if name.is_empty() {
-            return Err(MyError::InvalidFormat);
-        }
+        // 解析 name，去掉引号
+        let name = parts[2].trim().trim_matches('"').to_string();
 
         Ok(Record {
-            record_type,
             id,
             name,
         })
     }
 }
 
-// 打开文件并处理错误
-fn open_file(file_path: &str) -> Result<File, MyError> {
-    File::open(file_path).map_err(|_| MyError::FileNotFound(file_path.to_string()))
-}
-
-// 处理单个文件并返回记录数据
-fn process_file(file_path: &str) -> Result<Vec<Record>, MyError> {
-    let mut file = open_file(file_path)?;
+// 解析二进制文件函数
+fn parse_binary_file(file_path: &Path) -> Result<Vec<Record>, MyError> {
+    let mut file = File::open(file_path).map_err(MyError::IoError)?; // 打开文件
     let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-
-    let record_size = 28;
-    let num_records = buffer.len() / record_size;
+    file.read_to_end(&mut buffer).map_err(MyError::IoError)?; // 读取文件内容到 buffer
 
     let mut records = Vec::new();
-    for i in 0..num_records {
-        let start = i * record_size;
-        let end = start + record_size;
-        let record_bytes = &buffer[start..end];
+    let mut cursor = 0;
 
-        // 解析记录
-        let record = Record::from_bytes(record_bytes)?;
-        records.push(record);
+    while cursor < buffer.len() {
+        // 跳过空格和其他非必要字符
+        if buffer[cursor] == b' ' || buffer[cursor] == b'\n' || buffer[cursor] == b'\r' {
+            cursor += 1;
+            continue;
+        }
+
+        // 找到记录的开始位置
+        let record_start = cursor;
+
+        // 查找记录的结束位置（右括号）并提取记录
+        while cursor < buffer.len() && buffer[cursor] != b')' {
+            cursor += 1;
+        }
+        let record_end = cursor;
+
+        // 将字节数据转换为字符串
+        let record_str = String::from_utf8_lossy(&buffer[record_start..=record_end]);
+
+        // 使用 FromStr 解析 Record
+        match Record::from_str(&record_str) {
+            Ok(record) => records.push(record),
+            Err(_) => return Err(MyError::InvalidFormat), // 如果解析失败，返回格式错误
+        }
+
+        // 移动 cursor，跳过右括号
+        cursor += 1;
+
+        // 跳过下一条数据的左括号
+        cursor += 1;
     }
 
     Ok(records)
 }
 
-// 从命令行解析文件路径
-fn parse_args() -> Vec<String> {
-    let args: Vec<String> = env::args().collect();
-    // 返回文件路径参数，如果没有传入文件路径则使用默认值
-    if args.len() > 1 {
-        args[1..].to_vec() // 返回命令行参数中的所有路径
-    } else {
-        vec!["data.bin".to_string()] // 默认文件
-    }
-}
-
-// 创建一个 egui 窗口并显示解析结果
+// MyApp 结构体用于封装解析的数据
 struct MyApp {
-    file_paths: Vec<String>,
     file_contents: Option<Vec<Record>>,
     error_message: Option<String>,
 }
 
 impl MyApp {
-    fn new(file_paths: Vec<String>) -> Self {
+    fn new() -> Self {
         MyApp {
-            file_paths,
             file_contents: None,
             error_message: None,
         }
     }
 
     fn parse_files(&mut self) {
-        let mut all_records = Vec::new();
-
-        for file_path in &self.file_paths {
-            match process_file(file_path) {
-                Ok(records) => all_records.extend(records),
-                Err(e) => {
-                    self.error_message = Some(format!("Error processing file {}: {}", file_path, e));
-                    return;
-                }
+        let file_path = "data.bin"; // 直接使用默认路径
+        match parse_binary_file(Path::new(file_path)) {
+            Ok(records) => self.file_contents = Some(records),
+            Err(e) => {
+                self.error_message = Some(format!("Error processing file {}: {}", file_path, e));
             }
         }
-
-        self.file_contents = Some(all_records);
     }
 }
 
@@ -136,9 +140,8 @@ impl eframe::App for MyApp {
             if let Some(ref records) = self.file_contents {
                 ScrollArea::vertical().show(ui, |ui| {
                     for (i, record) in records.iter().enumerate() {
-                        ui.horizontal(|ui| {
+                        ui.group(|ui| {
                             ui.label(format!("Record #{}", i + 1));
-                            ui.label(format!("Type: {}", record.record_type));
                             ui.label(format!("ID: {}", record.id));
                             ui.label(format!("Name: {}", record.name));
                         });
@@ -155,18 +158,11 @@ impl eframe::App for MyApp {
 }
 
 // 主函数
-fn main() -> Result<(), MyError> {
-    let file_paths = parse_args();
-
+fn main() -> Result<(), eframe::Error> {
     // 创建并运行 eframe 应用
     eframe::run_native(
-        "Binary File Parser",
-        NativeOptions {
-            // 移除不再支持的字段
-            ..Default::default() // 仅使用默认选项
-        },
-        Box::new(|_cc| Ok(Box::<MyApp>::new(MyApp::new(file_paths)))),
-    );
-
-    Ok(())
+        "Binary File Viewer",
+        NativeOptions::default(),
+        Box::new(|_cc| Ok(Box::new(MyApp::new()))),
+    )
 }
