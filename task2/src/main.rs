@@ -72,7 +72,11 @@ impl eframe::App for MyApp {
             }
 
             if self.show_output && ui.button("保存输出到文件").clicked() {
-                if let Some(path) = rfd::FileDialog::new().set_directory(".").save_file() {
+                if let Some(path) = rfd::FileDialog::new()
+                        .set_directory(".")
+                        .set_file_name("saved.txt") // 设置默认文件名和后缀
+                        .save_file() 
+                {
                     self.output_file = Some(path);
                     if let Some(output_path) = &self.output_file {
                         match serde_json::to_string_pretty(&self.word_counts) {
